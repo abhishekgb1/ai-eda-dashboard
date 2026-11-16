@@ -381,8 +381,17 @@ with st.expander("🤖 Ask the Data Copilot", expanded=False):
     for message in messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
-    prompt = st.chat_input("Ask about patterns, columns, missing data, or KPIs", max_chars=1000)
-    if prompt:
+    with st.form("copilot_form", clear_on_submit=True):
+        prompt = st.text_input(
+            "Ask the Data Copilot",
+            placeholder="Ask about patterns, columns, missing data, or KPIs",
+            max_chars=1000,
+            label_visibility="collapsed",
+        )
+        submitted = st.form_submit_button("Ask", type="primary", width="stretch")
+    if submitted and not prompt.strip():
+        st.warning("Type a question first.")
+    if submitted and prompt.strip():
         turns = st.session_state.get("copilot_turns", 0)
         if turns >= 20:
             st.warning("This dataset chat has reached 20 questions. Clear the chat to start again.")
@@ -412,7 +421,13 @@ with st.expander("🤖 Ask the Data Copilot", expanded=False):
                     st.markdown(answer)
                 messages.append({"role": "assistant", "content": answer})
             except Exception as exc:
-                st.error(f"Could not get an answer: {exc}")
+                status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+                if status in {500, 502, 503, 504}:
+                    st.warning("Gemini is temporarily busy. Your question is saved above; try asking again in a moment.")
+                elif status == 429:
+                    st.warning("Gemini's request limit was reached. Please wait a little before asking again.")
+                else:
+                    st.error("The Copilot could not answer. Check the app's Gemini API key and try again.")
                 logger.error("Copilot error:\n%s", traceback.format_exc())
 
 # ── User prompt ──────────────────────────────────────────────────────────────
