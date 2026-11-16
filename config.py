@@ -43,6 +43,6 @@ def _get_secret(key: str, default: str | None = None) -> str | None:
 # ── Public constants ─────────────────────────────────────────────────────────
 
 GEMINI_API_KEY: str | None = _get_secret("GEMINI_API_KEY")
-GEMINI_TEXT_MODEL: str = _get_secret("GEMINI_TEXT_MODEL", "gemini-3.1-flash-lite") or "gemini-3.1-flash-lite"
+GEMINI_TEXT_MODEL: str = _get_secret("GEMINI_TEXT_MODEL", "gemini-3.5-flash-lite") or "gemini-3.5-flash-lite"
 # Optional paid image generation model. Leave unset to avoid Gemini image token charges.
 GEMINI_IMAGE_MODEL: str | None = _get_secret("GEMINI_IMAGE_MODEL")

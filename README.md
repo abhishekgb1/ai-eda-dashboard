@@ -1,6 +1,6 @@
 # AI-Powered EDA & Dashboard Generator
 
-GitHub repository: `Al-Powered-EDA-Dashboard-Generator`
+Public repository: [abhishekgb1/ai-eda-dashboard](https://github.com/abhishekgb1/ai-eda-dashboard)
 
 An intelligent exploratory data analysis tool that uses **Google Gemini** to decide _what_ to analyse, while computing every number from the real data in Python — **zero hallucinated numbers**.
 
@@ -11,6 +11,10 @@ An intelligent exploratory data analysis tool that uses **Google Gemini** to dec
 | Feature | Description |
 |---|---|
 | **Smart Analysis** | Upload CSV/Excel → Gemini designs KPIs, charts & insights |
+| **Data Copilot** | Ask follow-up questions using aggregate dataset statistics and validated analysis results |
+| **Data Quality Report** | Check completeness, missing values, duplicates, constant columns, and potential IQR outliers |
+| **Sample Dataset** | Explore the dashboard immediately with the included sales dataset |
+| **Filtered CSV Export** | Download the rows selected by the sidebar filters |
 | **No Hallucinated Numbers** | Every KPI and chart is computed from real data via pandas/Plotly |
 | **Interactive Charts** | Dark-themed Plotly charts with zoom, hover, and export |
 | **10 Chart Types** | Bar, line, scatter, histogram, box, pie, heatmap, treemap, sunburst, funnel |
@@ -25,10 +29,14 @@ An intelligent exploratory data analysis tool that uses **Google Gemini** to dec
 
 ---
 
+## 🔐 Data and privacy
+
+Uploads are processed by the Streamlit app in memory for analysis and filtering. When you run an AI analysis, Gemini receives a dataset profile that includes column names, summary statistics, category counts, and a small sample of rows. Data Copilot sends aggregate profile statistics and the chat questions, without raw rows. Do not upload confidential or personal data. The app does not save uploaded files or generated scripts to disk.
+
 ## 📁 Project Structure
 
 ```
-eda_streamlit_app/
+ai-eda-dashboard/
 ├── app.py                          # Streamlit UI + orchestration
 ├── config.py                       # API key & model config (secrets + .env)
 ├── requirements.txt
@@ -42,7 +50,8 @@ eda_streamlit_app/
 │   ├── prompts.py                  # Prompt templates for Gemini tasks
 │   ├── gemini_client.py            # Gemini client with retry + profile trimming
 │   ├── eda_engine.py               # Validation, KPIs, charts (10 types)
-│   └── filters.py                  # Dynamic sidebar filter builder
+│   ├── filters.py                  # Dynamic sidebar filter builder
+│   └── data_quality.py             # Deterministic quality checks
 └── outputs/
     ├── generated_code/             # Saved EDA scripts (gitignored)
     └── generated_images/           # Saved dashboard images (gitignored)
@@ -84,15 +93,14 @@ The app opens at `http://localhost:8501`. Uploading and exploring data works wit
 
 ## ☁️ Streamlit Community Cloud Deployment
 
-1. **Push to GitHub** — commit the repo (`.env` is gitignored, your key stays safe).
-2. **Create a new app** on [share.streamlit.io](https://share.streamlit.io/).
-3. **Add your secret** in the app's **Settings → Secrets** panel:
+1. Connect this GitHub repository on [Streamlit Community Cloud](https://share.streamlit.io/) and choose `main` and `app.py`.
+2. Add your Gemini key in the app's **Settings → Secrets** panel:
 
    ```toml
     GEMINI_API_KEY = "your-gemini-api-key-here"
    ```
 
-4. Deploy — `config.py` reads `st.secrets` first, so no code changes are needed.
+3. Deploy. `config.py` reads `st.secrets` first, so the key stays out of the repository.
 
 ---
 

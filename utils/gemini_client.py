@@ -13,9 +13,11 @@ from google.genai import types
 
 from utils.prompts import (
     ANALYSIS_PLAN_SYSTEM,
+    DATA_COPILOT_SYSTEM,
     DASHBOARD_IMAGE_PROMPT_SYSTEM,
     EDA_CODE_SYSTEM,
     build_analysis_plan_user_message,
+    build_data_copilot_user_message,
     build_dashboard_image_user_message,
     build_eda_code_user_message,
 )
@@ -112,6 +114,35 @@ class GeminiClient:
         raw = response.text or ""
         logger.debug("Raw analysis-plan response:\n%s", raw)
         return json.loads(raw)
+
+    def answer_data_question(
+        self,
+        profile: dict[str, Any],
+        question: str,
+        history: list[dict[str, str]] | None = None,
+        analysis_context: dict[str, Any] | None = None,
+    ) -> str:
+        """Answer one question from a compact, aggregate-only data profile."""
+        user_message = build_data_copilot_user_message(
+            self._trim_profile(profile),
+            question,
+            history=history,
+            analysis_context=analysis_context,
+        )
+        response = self._call_with_retry(
+            lambda: self._client.models.generate_content(
+                model=self._text_model,
+                contents=user_message,
+                config=types.GenerateContentConfig(
+                    system_instruction=DATA_COPILOT_SYSTEM,
+                    temperature=0.2,
+                ),
+            )
+        )
+        answer = (response.text or "").strip()
+        if not answer:
+            raise RuntimeError("Gemini returned an empty answer. Please try again.")
+        return answer
 
     def generate_eda_code(
         self,

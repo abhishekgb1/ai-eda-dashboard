@@ -21,11 +21,11 @@ Enhancements (v2):
 from __future__ import annotations
 
 import hashlib
+import html
+import io
 import json
 import logging
-import os
 import traceback
-from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -41,14 +41,10 @@ logger = logging.getLogger(__name__)
 # ── Local imports (must come after logging setup) ────────────────────────────
 from config import GEMINI_API_KEY, GEMINI_IMAGE_MODEL, GEMINI_TEXT_MODEL
 from utils.data_loader import build_data_profile, load_data
+from utils.data_quality import build_data_quality_report
 from utils.eda_engine import build_charts, compute_kpis, sanitize_plan
 from utils.filters import render_filters
 from utils.gemini_client import GeminiClient
-
-# ── Output directories ──────────────────────────────────────────────────────
-CODE_DIR = Path("outputs/generated_code")
-CODE_DIR.mkdir(parents=True, exist_ok=True)
-
 
 # ── Gemini client ───────────────────────────────────────────────────────────
 
@@ -70,8 +66,10 @@ def _get_gemini_client() -> GeminiClient:
 # ── Session-state helpers ───────────────────────────────────────────────────
 
 _DOWNSTREAM_KEYS = [
-    "df", "profile", "plan", "kpi_results", "chart_figures",
-    "generated_code", "filename", "analysis_cache",
+    "df", "profile", "quality_report", "filtered_df", "plan",
+    "kpi_results", "chart_figures", "generated_code", "generated_image",
+    "filename", "file_signature", "analysis_cache", "copilot_messages",
+    "copilot_turns",
 ]
 
 
@@ -85,6 +83,28 @@ def _cache_key(profile: dict, user_request: str) -> str:
     """Compute a deterministic hash for (profile + request) to enable caching."""
     blob = json.dumps(profile, sort_keys=True, default=str) + "|" + user_request.strip().lower()
     return hashlib.sha256(blob.encode()).hexdigest()[:16]
+
+
+def _load_dataset(uploaded_file) -> None:
+    """Load a new upload once and clear all file-specific session state."""
+    file_id = getattr(uploaded_file, "file_id", None)
+    signature = str(file_id) if file_id else hashlib.sha256(uploaded_file.getvalue()).hexdigest()
+    if st.session_state.get("file_signature") == signature and "df" in st.session_state:
+        return
+
+    _reset_downstream()
+    try:
+        df = load_data(uploaded_file)
+        st.session_state["df"] = df
+        st.session_state["profile"] = build_data_profile(df)
+        st.session_state["quality_report"] = build_data_quality_report(df)
+        st.session_state["filtered_df"] = df
+        st.session_state["filename"] = Path(uploaded_file.name).name
+        st.session_state["file_signature"] = signature
+    except Exception as exc:
+        st.error(f"Could not load this file: {exc}")
+        logger.error("File load error:\n%s", traceback.format_exc())
+        st.stop()
 
 
 # ── Page config ──────────────────────────────────────────────────────────────
@@ -242,22 +262,12 @@ with st.sidebar:
         help="Accepted formats: CSV, Excel (.xlsx / .xls)",
     )
 
-    if uploaded_file is not None:
-        # Reset state when a *different* file is uploaded
-        if st.session_state.get("filename") != uploaded_file.name:
-            _reset_downstream()
-            st.session_state["filename"] = uploaded_file.name
+    if uploaded_file is None and st.button("✨ Try sample sales data", width="stretch"):
+        uploaded_file = io.BytesIO((Path(__file__).parent / "sample_sales_data.csv").read_bytes())
+        uploaded_file.name = "sample_sales_data.csv"
 
-        # Load data (only once per file)
-        if "df" not in st.session_state:
-            try:
-                df = load_data(uploaded_file)
-                st.session_state["df"] = df
-                st.session_state["profile"] = build_data_profile(df)
-            except Exception as exc:
-                st.error(f"⚠️ Could not load file: {exc}")
-                logger.error("File load error:\n%s", traceback.format_exc())
-                st.stop()
+    if uploaded_file is not None:
+        _load_dataset(uploaded_file)
 
         df: pd.DataFrame = st.session_state["df"]
         st.success(f"✅ **{uploaded_file.name}** loaded")
@@ -290,6 +300,14 @@ with st.sidebar:
         with st.expander("🔎 Filter Data", expanded=False):
             filtered_df = render_filters(df)
             st.session_state["filtered_df"] = filtered_df
+        st.download_button(
+            "⬇️ Download filtered CSV",
+            data=st.session_state.get("filtered_df", df).to_csv(index=False).encode("utf-8"),
+            file_name=f"{Path(uploaded_file.name).stem}_filtered.csv",
+            mime="text/csv",
+            width="stretch",
+        )
+        st.info("Privacy: uploads are processed by this app. Gemini receives a dataset summary and sample rows for analysis. Avoid confidential or personal data.")
 
     st.divider()
     st.caption("Powered by [Google Gemini](https://ai.google.dev/) · Built with Streamlit")
@@ -302,7 +320,7 @@ with st.sidebar:
 st.markdown("# 📊 AI-Powered EDA & Dashboard Generator")
 
 if "df" not in st.session_state:
-    st.info("👈 Upload a CSV or Excel file in the sidebar to get started.")
+    st.info("👈 Upload a CSV or Excel file, or try the sample sales dataset.")
     st.stop()
 
 df_raw = st.session_state["df"]
@@ -321,11 +339,11 @@ with st.expander("🔍 Data Preview", expanded=False):
     }
     badges_html = " ".join(
         f'<span class="col-badge {badge_map.get(ctype, ("", ""))[1]}">'
-        f'{badge_map.get(ctype, ("❓", ""))[0]} {col}</span>'
+        f'{badge_map.get(ctype, ("❓", ""))[0]} {html.escape(str(col))}</span>'
         for col, ctype in col_types.items()
     )
     st.markdown(badges_html, unsafe_allow_html=True)
-    st.dataframe(df.head(50), use_container_width=True)
+    st.dataframe(df.head(50), width="stretch")
 
     # Missing value summary
     missing = profile.get("missing_pct", {})
@@ -334,6 +352,68 @@ with st.expander("🔍 Data Preview", expanded=False):
         st.caption(f"⚠️ Columns with missing data: " +
                    ", ".join(f"**{k}** ({v}%)" for k, v in cols_with_missing.items()))
     st.caption(f"{df.shape[0]:,} rows × {df.shape[1]} columns")
+
+# ── Deterministic quality report ────────────────────────────────────────────
+quality = st.session_state["quality_report"]
+with st.expander("🧹 Data quality report", expanded=False):
+    q1, q2, q3, q4 = st.columns(4)
+    q1.metric("Completeness", f"{quality['completeness_pct']:.1f}%")
+    q2.metric("Missing cells", f"{quality['missing_cells']:,}")
+    q3.metric("Rows with missing data", f"{quality['missing_rows']:,}")
+    q4.metric("Duplicate rows", f"{quality['duplicate_rows']:,}")
+    if quality["missing_by_column"]:
+        st.markdown("**Missing values by column**")
+        st.dataframe(pd.DataFrame(quality["missing_by_column"]), hide_index=True, width="stretch")
+    if quality["constant_columns"]:
+        st.caption("Constant columns: " + ", ".join(quality["constant_columns"]))
+    if quality["outliers"]:
+        st.markdown("**Potential numeric outliers (1.5×IQR rule)**")
+        st.dataframe(pd.DataFrame(quality["outliers"]), hide_index=True, width="stretch")
+
+# ── AI dataset copilot ──────────────────────────────────────────────────────
+with st.expander("🤖 Ask the Data Copilot", expanded=False):
+    st.caption("Ask follow-up questions about this dataset or generated analysis. Gemini receives aggregate statistics and your questions; raw rows are not sent in this chat. Avoid entering personal or confidential information.")
+    if st.button("Clear chat", key="clear_copilot"):
+        st.session_state["copilot_messages"] = []
+        st.session_state["copilot_turns"] = 0
+        st.rerun()
+    messages = st.session_state.setdefault("copilot_messages", [])
+    for message in messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+    prompt = st.chat_input("Ask about patterns, columns, missing data, or KPIs", max_chars=1000)
+    if prompt:
+        turns = st.session_state.get("copilot_turns", 0)
+        if turns >= 20:
+            st.warning("This dataset chat has reached 20 questions. Clear the chat to start again.")
+        else:
+            messages.append({"role": "user", "content": prompt})
+            st.session_state["copilot_turns"] = turns + 1
+            with st.chat_message("user"):
+                st.markdown(prompt)
+            try:
+                copilot_profile = build_data_profile(df, sample_rows=0)
+                copilot_profile.pop("sample_rows", None)
+                context = {
+                    "computed_metrics": [
+                        {key: item.get(key) for key in ("name", "formatted", "agg", "column", "delta_label")}
+                        for item in st.session_state.get("kpi_results", [])
+                    ],
+                    "validated_insights": st.session_state.get("plan", {}).get("insights", []),
+                    "data_quality": {
+                        key: quality[key] for key in ("completeness_pct", "missing_cells", "duplicate_rows")
+                    },
+                }
+                with st.chat_message("assistant"):
+                    with st.spinner("Reviewing the dataset summary…"):
+                        answer = _get_gemini_client().answer_data_question(
+                            copilot_profile, prompt, history=messages[-9:-1], analysis_context=context
+                        )
+                    st.markdown(answer)
+                messages.append({"role": "assistant", "content": answer})
+            except Exception as exc:
+                st.error(f"Could not get an answer: {exc}")
+                logger.error("Copilot error:\n%s", traceback.format_exc())
 
 # ── User prompt ──────────────────────────────────────────────────────────────
 st.markdown("---")
@@ -346,7 +426,7 @@ user_request = st.text_area(
     height=100,
 )
 
-analyze_clicked = st.button("🚀 Analyze", type="primary", use_container_width=True)
+analyze_clicked = st.button("🚀 Analyze", type="primary", width="stretch")
 
 # ── Run the analysis pipeline ────────────────────────────────────────────────
 if analyze_clicked:
@@ -495,9 +575,9 @@ if "kpi_results" in st.session_state:
                 st.markdown(
                     f"""
                     <div class="kpi-card">
-                        <div class="kpi-name">{kpi['name']}</div>
-                        <div class="kpi-value">{kpi['formatted']}</div>
-                        <div class="kpi-meta">{kpi['agg'].upper()}({kpi['column']})</div>
+                        <div class="kpi-name">{html.escape(str(kpi['name']))}</div>
+                        <div class="kpi-value">{html.escape(str(kpi['formatted']))}</div>
+                        <div class="kpi-meta">{html.escape(str(kpi['agg']).upper())}({html.escape(str(kpi['column']))})</div>
                         {delta_html}
                     </div>
                     """,
@@ -519,12 +599,12 @@ if "kpi_results" in st.session_state:
                         with c:
                             st.plotly_chart(
                                 fig,
-                                use_container_width=True,
+                                width="stretch",
                                 key=f"chart_{i+j}",
                             )
                             if desc:
                                 st.markdown(
-                                    f'<div class="chart-desc">💬 {desc}</div>',
+                                    f'<div class="chart-desc">💬 {html.escape(str(desc))}</div>',
                                     unsafe_allow_html=True,
                                 )
         else:
@@ -540,7 +620,7 @@ if "kpi_results" in st.session_state:
             st.caption("_These observations are AI-generated commentary grounded in the computed data profile._")
             for insight in insights:
                 st.markdown(
-                    f'<div class="insight-item">{insight}</div>',
+                    f'<div class="insight-item">{html.escape(str(insight))}</div>',
                     unsafe_allow_html=True,
                 )
         else:
@@ -555,7 +635,7 @@ if "kpi_results" in st.session_state:
 
         generate_code_clicked = st.button(
             "⚡ Generate EDA Code",
-            use_container_width=True,
+            width="stretch",
             help="Generate a standalone Python script (pandas + matplotlib) for this analysis.",
             key="btn_generate_code",
         )
@@ -570,12 +650,6 @@ if "kpi_results" in st.session_state:
                         st.session_state.get("filename", "data.csv"),
                     )
                     st.session_state["generated_code"] = code
-
-                    # Save a timestamped copy
-                    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    save_path = CODE_DIR / f"eda_script_{ts}.py"
-                    save_path.write_text(code, encoding="utf-8")
-                    logger.info("EDA script saved to %s", save_path)
 
                 except Exception as exc:
                     st.error(f"⚠️ Code generation failed: {exc}")
