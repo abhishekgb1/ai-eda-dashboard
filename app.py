@@ -380,7 +380,7 @@ with st.expander("🤖 Ask the Data Copilot", expanded=False):
     messages = st.session_state.setdefault("copilot_messages", [])
     for message in messages:
         with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+            st.markdown(message["content"].replace("$", r"\$"))
     with st.form("copilot_form", clear_on_submit=True):
         prompt = st.text_input(
             "Ask the Data Copilot",
@@ -418,7 +418,7 @@ with st.expander("🤖 Ask the Data Copilot", expanded=False):
                         answer = _get_gemini_client().answer_data_question(
                             copilot_profile, prompt, history=messages[-9:-1], analysis_context=context
                         )
-                    st.markdown(answer)
+                    st.markdown(answer.replace("$", r"\$"))
                 messages.append({"role": "assistant", "content": answer})
             except Exception as exc:
                 status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
