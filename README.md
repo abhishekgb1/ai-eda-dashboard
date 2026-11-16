@@ -15,6 +15,7 @@ An intelligent exploratory data analysis tool that uses **Google Gemini** to dec
 | **Data Quality Report** | Check completeness, missing values, duplicates, constant columns, and potential IQR outliers |
 | **Sample Dataset** | Explore the dashboard immediately with the included sales dataset |
 | **Filtered CSV Export** | Download the rows selected by the sidebar filters |
+| **Interactive Dashboard Export** | Download a standalone HTML dashboard with real KPIs and interactive Plotly charts |
 | **No Hallucinated Numbers** | Every KPI and chart is computed from real data via pandas/Plotly |
 | **Interactive Charts** | Dark-themed Plotly charts with zoom, hover, and export |
 | **10 Chart Types** | Bar, line, scatter, histogram, box, pie, heatmap, treemap, sunburst, funnel |
@@ -25,7 +26,6 @@ An intelligent exploratory data analysis tool that uses **Google Gemini** to dec
 | **Analysis Caching** | Same prompt on the same file returns instantly without re-calling Gemini |
 | **Smart Date Handling** | Auto-detects date columns and resamples line charts appropriately |
 | **EDA Code Export** | One-click Python script generation (pandas + matplotlib) |
-| **Dashboard Mockup** | AI-generated stylised dashboard image (Gemini image model) |
 
 ---
 

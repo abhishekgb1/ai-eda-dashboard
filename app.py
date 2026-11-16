@@ -41,6 +41,7 @@ logger = logging.getLogger(__name__)
 # ── Local imports (must come after logging setup) ────────────────────────────
 from config import GEMINI_API_KEY, GEMINI_IMAGE_MODEL, GEMINI_TEXT_MODEL
 from utils.data_loader import build_data_profile, load_data
+from utils.dashboard_export import build_interactive_dashboard_html
 from utils.data_quality import build_data_quality_report
 from utils.eda_engine import build_charts, compute_kpis, sanitize_plan
 from utils.filters import render_filters
@@ -564,12 +565,12 @@ if "kpi_results" in st.session_state:
     chart_figures = st.session_state.get("chart_figures", [])
 
     # ── Tabbed layout ────────────────────────────────────────────────────
-    tab_kpis, tab_charts, tab_insights, tab_code, tab_dashboard = st.tabs(
-        ["📌 KPIs", "📊 Charts", "💡 Insights", "🧑‍💻 Code", "📈 Dashboard"]
+    tab_dashboard, tab_kpis, tab_charts, tab_insights, tab_code = st.tabs(
+        ["📈 Interactive dashboard", "📌 KPIs", "📊 Charts", "💡 Insights", "🧑‍💻 Code"]
     )
 
     # ══════════════════════════════════════════════════════════════════════
-    # TAB 1: KPI Metric Cards
+    # KPI Metric Cards
     # ══════════════════════════════════════════════════════════════════════
     with tab_kpis:
         st.markdown('<div class="section-header">📌 Key Performance Indicators</div>', unsafe_allow_html=True)
@@ -686,14 +687,29 @@ if "kpi_results" in st.session_state:
             )
 
     # ══════════════════════════════════════════════════════════════════════
-    # TAB 5: Interactive Dashboard
+    # Interactive Dashboard
     # ══════════════════════════════════════════════════════════════════════
     with tab_dashboard:
-        st.subheader("Analysis dashboard")
+        st.subheader("Interactive analysis dashboard")
+        st.caption("This dashboard is built from your data. Charts support hover, zoom, pan, and legend controls.")
         dataset = st.session_state.get("df")
         if dataset is not None:
             filename = st.session_state.get("filename", "Uploaded dataset")
             st.caption(f"{filename} · {len(dataset):,} rows · {len(dataset.columns):,} columns")
+
+        dashboard_html = build_interactive_dashboard_html(
+            st.session_state.get("filename", "dataset.csv"),
+            kpi_results,
+            chart_figures,
+            plan.get("insights", []),
+        )
+        st.download_button(
+            "⬇️ Download interactive dashboard (HTML)",
+            data=dashboard_html.encode("utf-8"),
+            file_name=f"{Path(st.session_state.get('filename', 'dataset.csv')).stem}_dashboard.html",
+            mime="text/html",
+            key="download_interactive_dashboard",
+        )
 
         with st.container(horizontal=True):
             for kpi in kpi_results:
