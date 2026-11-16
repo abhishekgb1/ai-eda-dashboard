@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 _RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 _SERVER_ERROR_CODES = {500, 502, 503, 504}
 _MAX_PROFILE_CHARS = 16_000
-_FALLBACK_TEXT_MODEL = "gemini-3.1-flash-lite"
+_FALLBACK_TEXT_MODELS = ("gemini-3.1-flash-lite", "gemini-3.8-flash")
 
 
 class GeminiClient:
@@ -76,22 +76,41 @@ class GeminiClient:
         raise last_exc  # type: ignore[misc]
 
     def _call_text_with_fallback(self, make_request):
-        """Retry a transient server outage on a separate supported text model."""
+        """Retry a transient server outage on other supported text models."""
         try:
             return self._call_with_retry(lambda: make_request(self._text_model))
         except Exception as exc:
             status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
-            if status not in _SERVER_ERROR_CODES or self._text_model == _FALLBACK_TEXT_MODEL:
+            if status not in _SERVER_ERROR_CODES:
                 raise
 
-            logger.warning(
-                "Primary Gemini text model %s remained unavailable (status=%s); "
-                "trying fallback model %s",
-                self._text_model,
-                status,
-                _FALLBACK_TEXT_MODEL,
-            )
-            return self._call_with_retry(lambda: make_request(_FALLBACK_TEXT_MODEL))
+            last_exc = exc
+            for fallback_model in _FALLBACK_TEXT_MODELS:
+                if fallback_model == self._text_model:
+                    continue
+                logger.warning(
+                    "Gemini text model %s remained unavailable (status=%s); "
+                    "trying fallback model %s",
+                    self._text_model,
+                    status,
+                    fallback_model,
+                )
+                try:
+                    return self._call_with_retry(lambda: make_request(fallback_model))
+                except Exception as fallback_exc:
+                    last_exc = fallback_exc
+                    fallback_status = getattr(fallback_exc, "status_code", None) or getattr(fallback_exc, "code", None)
+                    if fallback_status not in _SERVER_ERROR_CODES:
+                        raise
+                    status = fallback_status
+            raise last_exc
+
+    @staticmethod
+    def _text_generation_config(model: str, **kwargs):
+        """Build a compatible config; Gemini 3.8 does not accept temperature."""
+        if model == "gemini-3.8-flash":
+            kwargs.pop("temperature", None)
+        return types.GenerateContentConfig(**kwargs)
 
     @staticmethod
     def _trim_profile(profile: dict[str, Any]) -> dict[str, Any]:
@@ -124,7 +143,8 @@ class GeminiClient:
             lambda model: self._client.models.generate_content(
                 model=model,
                 contents=user_message,
-                config=types.GenerateContentConfig(
+                config=self._text_generation_config(
+                    model,
                     system_instruction=ANALYSIS_PLAN_SYSTEM,
                     response_mime_type="application/json",
                     temperature=0.1,
@@ -153,7 +173,8 @@ class GeminiClient:
             lambda model: self._client.models.generate_content(
                 model=model,
                 contents=user_message,
-                config=types.GenerateContentConfig(
+                config=self._text_generation_config(
+                    model,
                     system_instruction=DATA_COPILOT_SYSTEM,
                     temperature=0.2,
                 ),
@@ -175,7 +196,8 @@ class GeminiClient:
             lambda model: self._client.models.generate_content(
                 model=model,
                 contents=user_message,
-                config=types.GenerateContentConfig(
+                config=self._text_generation_config(
+                    model,
                     system_instruction=EDA_CODE_SYSTEM,
                     temperature=0.2,
                 ),
