@@ -24,7 +24,9 @@ from utils.prompts import (
 
 logger = logging.getLogger(__name__)
 _RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+_SERVER_ERROR_CODES = {500, 502, 503, 504}
 _MAX_PROFILE_CHARS = 16_000
+_FALLBACK_TEXT_MODEL = "gemini-3.1-flash-lite"
 
 
 class GeminiClient:
@@ -73,6 +75,24 @@ class GeminiClient:
                     raise
         raise last_exc  # type: ignore[misc]
 
+    def _call_text_with_fallback(self, make_request):
+        """Retry a transient server outage on a separate supported text model."""
+        try:
+            return self._call_with_retry(lambda: make_request(self._text_model))
+        except Exception as exc:
+            status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+            if status not in _SERVER_ERROR_CODES or self._text_model == _FALLBACK_TEXT_MODEL:
+                raise
+
+            logger.warning(
+                "Primary Gemini text model %s remained unavailable (status=%s); "
+                "trying fallback model %s",
+                self._text_model,
+                status,
+                _FALLBACK_TEXT_MODEL,
+            )
+            return self._call_with_retry(lambda: make_request(_FALLBACK_TEXT_MODEL))
+
     @staticmethod
     def _trim_profile(profile: dict[str, Any]) -> dict[str, Any]:
         import copy
@@ -100,9 +120,9 @@ class GeminiClient:
         user_message = build_analysis_plan_user_message(
             self._trim_profile(profile), user_request
         )
-        response = self._call_with_retry(
-            lambda: self._client.models.generate_content(
-                model=self._text_model,
+        response = self._call_text_with_fallback(
+            lambda model: self._client.models.generate_content(
+                model=model,
                 contents=user_message,
                 config=types.GenerateContentConfig(
                     system_instruction=ANALYSIS_PLAN_SYSTEM,
@@ -129,9 +149,9 @@ class GeminiClient:
             history=history,
             analysis_context=analysis_context,
         )
-        response = self._call_with_retry(
-            lambda: self._client.models.generate_content(
-                model=self._text_model,
+        response = self._call_text_with_fallback(
+            lambda model: self._client.models.generate_content(
+                model=model,
                 contents=user_message,
                 config=types.GenerateContentConfig(
                     system_instruction=DATA_COPILOT_SYSTEM,
@@ -151,9 +171,9 @@ class GeminiClient:
         filename: str,
     ) -> str:
         user_message = build_eda_code_user_message(plan, profile, filename)
-        response = self._call_with_retry(
-            lambda: self._client.models.generate_content(
-                model=self._text_model,
+        response = self._call_text_with_fallback(
+            lambda model: self._client.models.generate_content(
+                model=model,
                 contents=user_message,
                 config=types.GenerateContentConfig(
                     system_instruction=EDA_CODE_SYSTEM,

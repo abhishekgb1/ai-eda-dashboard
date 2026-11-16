@@ -480,7 +480,11 @@ if analyze_clicked:
             logger.error("JSONDecodeError:\n%s", traceback.format_exc())
             st.stop()
         except Exception as exc:
-            st.error(f"⚠️ Gemini API error: {exc}")
+            status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+            if status in {500, 502, 503, 504}:
+                st.error("⚠️ Gemini is temporarily busy. Please try Analyze again in a moment; your uploaded data and filters are still available.")
+            else:
+                st.error(f"⚠️ Gemini request failed ({status or 'unknown error'}). Check the app's Gemini API key and try again.")
             logger.error("Gemini API error:\n%s", traceback.format_exc())
             st.stop()
 
