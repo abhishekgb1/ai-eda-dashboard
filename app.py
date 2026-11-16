@@ -64,6 +64,23 @@ def _get_gemini_client() -> GeminiClient:
     )
 
 
+def _copilot_error_message(exc: Exception) -> str:
+    """Turn common Gemini failures into actionable, user-facing guidance."""
+    status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+    message = str(exc).lower()
+    if status in {401, 403}:
+        return "Gemini rejected the app's API key. Check that `GEMINI_API_KEY` is valid and enabled for the Gemini API."
+    if status == 404 or "model_not_found" in message or "not found" in message:
+        return "The configured Gemini model is unavailable. Update `GEMINI_TEXT_MODEL` in Streamlit Secrets to a supported text model, such as `gemini-3.5-flash-lite`."
+    if status == 429:
+        return "Gemini's quota or rate limit was reached. Wait a little, then retry this question."
+    if status in {500, 502, 503, 504}:
+        return "Gemini is temporarily unavailable. Retry this question in a moment."
+    if status == 400:
+        return "Gemini rejected this request. Try a shorter question, or clear the chat and ask again."
+    return "The Copilot could not reach Gemini. Check the app's Gemini API key and connection, then retry your question."
+
+
 # ── Session-state helpers ───────────────────────────────────────────────────
 
 _DOWNSTREAM_KEYS = [
@@ -377,6 +394,7 @@ with st.expander("🤖 Ask the Data Copilot", expanded=False):
     if st.button("Clear chat", key="clear_copilot"):
         st.session_state["copilot_messages"] = []
         st.session_state["copilot_turns"] = 0
+        st.session_state.pop("copilot_retry_prompt", None)
         st.rerun()
     messages = st.session_state.setdefault("copilot_messages", [])
     for message in messages:
@@ -390,17 +408,23 @@ with st.expander("🤖 Ask the Data Copilot", expanded=False):
             label_visibility="collapsed",
         )
         submitted = st.form_submit_button("Ask", type="primary", width="stretch")
+    retry_prompt = st.session_state.get("copilot_retry_prompt")
+    retry_clicked = False
+    if retry_prompt:
+        st.caption(f"Your last question wasn't answered: “{retry_prompt}”")
+        retry_clicked = st.button("↻ Retry last question", key="retry_copilot", width="stretch")
     if submitted and not prompt.strip():
         st.warning("Type a question first.")
-    if submitted and prompt.strip():
+    active_prompt = prompt.strip() if submitted else retry_prompt if retry_clicked else ""
+    if active_prompt:
         turns = st.session_state.get("copilot_turns", 0)
         if turns >= 20:
             st.warning("This dataset chat has reached 20 questions. Clear the chat to start again.")
         else:
-            messages.append({"role": "user", "content": prompt})
-            st.session_state["copilot_turns"] = turns + 1
-            with st.chat_message("user"):
-                st.markdown(prompt)
+            if submitted:
+                messages.append({"role": "user", "content": active_prompt})
+                with st.chat_message("user"):
+                    st.markdown(active_prompt)
             try:
                 copilot_profile = build_data_profile(df, sample_rows=0)
                 copilot_profile.pop("sample_rows", None)
@@ -417,18 +441,15 @@ with st.expander("🤖 Ask the Data Copilot", expanded=False):
                 with st.chat_message("assistant"):
                     with st.spinner("Reviewing the dataset summary…"):
                         answer = _get_gemini_client().answer_data_question(
-                            copilot_profile, prompt, history=messages[-9:-1], analysis_context=context
+                            copilot_profile, active_prompt, history=messages[-9:-1], analysis_context=context
                         )
                     st.markdown(answer.replace("$", r"\$"))
                 messages.append({"role": "assistant", "content": answer})
+                st.session_state["copilot_turns"] = turns + 1
+                st.session_state.pop("copilot_retry_prompt", None)
             except Exception as exc:
-                status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
-                if status in {500, 502, 503, 504}:
-                    st.warning("Gemini is temporarily busy. Your question is saved above; try asking again in a moment.")
-                elif status == 429:
-                    st.warning("Gemini's request limit was reached. Please wait a little before asking again.")
-                else:
-                    st.error("The Copilot could not answer. Check the app's Gemini API key and try again.")
+                st.session_state["copilot_retry_prompt"] = active_prompt
+                st.error(_copilot_error_message(exc))
                 logger.error("Copilot error:\n%s", traceback.format_exc())
 
 # ── User prompt ──────────────────────────────────────────────────────────────
